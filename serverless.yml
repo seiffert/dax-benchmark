@@ -1,0 +1,201 @@
+service: dax-benchmark
+
+provider:
+  name: aws
+  runtime: go1.x
+  region: eu-west-1
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:*
+        - dax:*
+        - cloudwatch:PutMetricData
+      Resource: "*"
+  vpc:
+    securityGroupIds:
+      - "Fn::GetAtt": SecurityGroup.GroupId
+    subnetIds:
+      - Ref: PrivateSubnetA
+
+package:
+ exclude:
+   - ./**
+ include:
+   - ./bin/**
+
+functions:
+  benchmark-dynamodb:
+    handler: bin/benchmark-dynamodb
+    timeout: 300
+  benchmark-dax:
+    handler: bin/benchmark-dax
+    timeout: 300
+    environment:
+      DAX_ENDPOINT:
+        "Fn::GetAtt": [daxCluster, ClusterDiscoveryEndpoint]
+
+resources:
+  Resources:
+    VPC:
+      Type: AWS::EC2::VPC
+      Properties:
+        CidrBlock: "10.0.0.0/16"
+        EnableDnsHostnames: true
+        EnableDnsSupport: true
+    InternetGateway:
+      Type: AWS::EC2::InternetGateway
+    VPCGatewayAttachment:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+        VpcId:
+          Ref: VPC
+        InternetGatewayId:
+          Ref: InternetGateway
+
+    ElasticIp:
+      Type: AWS::EC2::EIP
+      Properties:
+        Domain: vpc
+    NatGateway:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId:
+          Fn::GetAtt:
+            - ElasticIp
+            - AllocationId
+        SubnetId:
+          Ref: PublicSubnetA
+
+    PrivateSubnetA:
+      DependsOn: VPC
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId:
+          Ref: VPC
+        AvailabilityZone: ${self:provider.region}a
+        CidrBlock: "10.0.1.0/24"
+    PublicSubnetA:
+      DependsOn: VPC
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId:
+          Ref: VPC
+        AvailabilityZone: ${self:provider.region}a
+        CidrBlock: "10.0.2.0/24"
+    DefaultPrivateRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId:
+          Ref: VPC
+    DefaultPrivateRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId:
+          Ref: DefaultPrivateRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        NatGatewayId:
+          Ref: NatGateway
+    DefaultPublicRouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId:
+          Ref: VPC
+    DefaultPublicRoute:
+      Type: AWS::EC2::Route
+      Properties:
+        RouteTableId:
+          Ref: DefaultPublicRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId:
+          Ref: InternetGateway
+    SubnetRouteTableAssociationPrivateA:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          Ref: PrivateSubnetA
+        RouteTableId:
+          Ref: DefaultPrivateRouteTable
+    SubnetRouteTableAssociationPublicA:
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          Ref: PublicSubnetA
+        RouteTableId:
+          Ref: DefaultPublicRouteTable
+    SecurityGroup:
+      DependsOn: VPC
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: SecurityGroup for Serverless Functions
+        VpcId:
+          Ref: VPC
+    SecurityGroupInternalTrafficRule:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+        IpProtocol: tcp
+        FromPort: '0'
+        ToPort: '65535'
+        SourceSecurityGroupId:
+          Fn::GetAtt: [SecurityGroup, GroupId]
+        GroupId:
+          Fn::GetAtt: [SecurityGroup, GroupId]
+
+    TestTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: dax-tests-table
+        AttributeDefinitions:
+          - AttributeName: name
+            AttributeType: S
+        KeySchema:
+          - AttributeName: name
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 10
+          WriteCapacityUnits: 1
+
+    daxIAMRole:
+      Type: "AWS::IAM::Role"
+      Properties: 
+        AssumeRolePolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+            - 
+              Effect: "Allow"
+              Principal: 
+                Service: 
+                  - "dax.amazonaws.com"
+              Action: 
+                - "sts:AssumeRole"
+        Path: "/"
+    daxIAMRolePolicies: 
+      Type: "AWS::IAM::Policy"
+      Properties: 
+        PolicyName: "dax-benchmark-policy"
+        PolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+            - Effect: "Allow"
+              Action: "dynamodb:*"
+              Resource: "arn:aws:dynamodb:eu-west-1:*:table/*"
+        Roles: 
+          - Ref: daxIAMRole
+
+    daxCluster:
+      Type: AWS::DAX::Cluster
+      Properties:
+        ClusterName: "benchmark-cluster"
+        NodeType: "dax.t2.medium"
+        ReplicationFactor: 3
+        IAMRoleARN: 
+          Fn::GetAtt: [daxIAMRole, Arn]
+        SubnetGroupName:
+          Ref: daxSubnetGroup
+        SecurityGroupIds:
+          - "Fn::GetAtt": SecurityGroup.GroupId
+    daxSubnetGroup:
+      Type: AWS::DAX::SubnetGroup
+      Properties:
+        SubnetGroupName: "dax-subnet-group"
+        SubnetIds:
+          - Ref: PrivateSubnetA
