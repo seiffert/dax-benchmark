@@ -14,7 +14,8 @@ type Response struct {
 }
 
 func Handler() (Response, error) {
-	benchmark.Benchmark("benchmark-dynamodb", dynamodb.New(session.Must(session.NewSession(aws.NewConfig().WithMaxRetries(0)))))
+	client := dynamodb.New(session.Must(session.NewSession(aws.NewConfig().WithMaxRetries(0))))
+	benchmark.New("benchmark-dynamodb", client).Run()
 
 	return Response{
 		Message: "I'm done!",

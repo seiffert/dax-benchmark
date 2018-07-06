@@ -29,7 +29,7 @@ func Handler() (Response, error) {
 		panic(fmt.Errorf("unable to initialize dax client %v", err))
 	}
 
-	benchmark.Benchmark("benchmark-dax", client)
+	benchmark.New("benchmark-dax", client).Run()
 
 	return Response{
 		Message: "I'm done!",

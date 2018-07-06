@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
+	"github.com/aws/aws-sdk-go/service/cloudwatch/cloudwatchiface"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/dynamodb/dynamodbiface"
 	uuid "github.com/satori/go.uuid"
@@ -22,44 +23,41 @@ const (
 	benchmarkDuration = 4 * time.Minute
 )
 
-var (
-	client       dynamodbiface.DynamoDBAPI
-	cw           = cloudwatch.New(session.Must(session.NewSession()))
-	functionName string
-)
-
-type Response struct {
-	Message string `json:"message"`
+func New(name string, c dynamodbiface.DynamoDBAPI) *Benchmark {
+	return &Benchmark{
+		name:   name,
+		client: c,
+		cw:     cloudwatch.New(session.Must(session.NewSession())),
+	}
 }
 
-func Benchmark(fn string, c dynamodbiface.DynamoDBAPI) (Response, error) {
+type Benchmark struct {
+	name   string
+	client dynamodbiface.DynamoDBAPI
+	cw     cloudwatchiface.CloudWatchAPI
+}
+
+func (b *Benchmark) Run() {
 	ctx, cancel := context.WithTimeout(context.Background(), benchmarkDuration)
 	defer cancel()
-
-	client = c
-	functionName = fn
 
 	var wg sync.WaitGroup
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
-			worker(ctx, fmt.Sprintf("%s worker %d", fn, i))
+			b.startWorker(ctx, fmt.Sprintf("%s worker %d", b.name, i))
 			wg.Done()
 		}()
 		time.Sleep(1 * time.Second / numWorkers)
 	}
 	wg.Wait()
-
-	return Response{
-		Message: "I'm done!",
-	}, nil
 }
 
-// worker performs one read request per second and on every tenth second also
-// a write request. It stops when the passed context is cancelled.
-func worker(ctx context.Context, name string) {
+// startWorker performs one read request per second and on every tenth second
+// also a write request. It stops when the passed context is cancelled.
+func (b *Benchmark) startWorker(ctx context.Context, name string) {
 	log.Printf("Starting %s", name)
-	if itemExists(ctx, name) {
+	if b.itemExists(ctx, name) {
 		log.Printf("Stopping %s, it looks like another one is active", name)
 		return
 	}
@@ -69,22 +67,22 @@ func worker(ctx context.Context, name string) {
 		select {
 		case <-ctx.Done():
 			log.Printf("Stopping %s", name)
-			cleanup(name)
+			b.cleanup(name)
 			return
 		case <-time.Tick(1 * time.Second):
 			if i%10 == 0 {
-				writeAccess(ctx, name)
+				b.writeAccess(ctx, name)
 			}
-			readAccess(ctx, name)
+			b.readAccess(ctx, name)
 			i++
 		}
 	}
 }
 
-func writeAccess(ctx context.Context, name string) {
-	defer reportLatency(ctx, "PutItem", time.Now())
+func (b *Benchmark) writeAccess(ctx context.Context, name string) {
+	defer b.reportLatency(ctx, "PutItem", time.Now())
 
-	_, err := client.PutItemWithContext(ctx, &dynamodb.PutItemInput{
+	_, err := b.client.PutItemWithContext(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(tableName),
 		Item: map[string]*dynamodb.AttributeValue{
 			"name": {
@@ -103,10 +101,10 @@ func writeAccess(ctx context.Context, name string) {
 	}
 }
 
-func readAccess(ctx context.Context, name string) {
-	defer reportLatency(ctx, "GetItem", time.Now())
+func (b *Benchmark) readAccess(ctx context.Context, name string) {
+	defer b.reportLatency(ctx, "GetItem", time.Now())
 
-	_, err := client.GetItemWithContext(ctx, &dynamodb.GetItemInput{
+	_, err := b.client.GetItemWithContext(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(tableName),
 		Key: map[string]*dynamodb.AttributeValue{
 			"name": {
@@ -122,8 +120,8 @@ func readAccess(ctx context.Context, name string) {
 	}
 }
 
-func itemExists(ctx context.Context, name string) bool {
-	out, err := client.GetItemWithContext(ctx, &dynamodb.GetItemInput{
+func (b *Benchmark) itemExists(ctx context.Context, name string) bool {
+	out, err := b.client.GetItemWithContext(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(tableName),
 		Key: map[string]*dynamodb.AttributeValue{
 			"name": {
@@ -140,8 +138,8 @@ func itemExists(ctx context.Context, name string) bool {
 	return out.Item != nil
 }
 
-func cleanup(name string) {
-	_, err := client.DeleteItem(&dynamodb.DeleteItemInput{
+func (b *Benchmark) cleanup(name string) {
+	_, err := b.client.DeleteItem(&dynamodb.DeleteItemInput{
 		TableName: aws.String(tableName),
 		Key: map[string]*dynamodb.AttributeValue{
 			"name": {
@@ -154,14 +152,14 @@ func cleanup(name string) {
 	}
 }
 
-func reportLatency(ctx context.Context, op string, start time.Time) {
+func (b *Benchmark) reportLatency(ctx context.Context, op string, start time.Time) {
 	l := time.Now().Sub(start)
-	_, err := cw.PutMetricDataWithContext(ctx, &cloudwatch.PutMetricDataInput{
+	_, err := b.cw.PutMetricDataWithContext(ctx, &cloudwatch.PutMetricDataInput{
 		Namespace: aws.String("DaxBenchmark"),
 		MetricData: []*cloudwatch.MetricDatum{{
 			Dimensions: []*cloudwatch.Dimension{{
 				Name:  aws.String("FunctionName"),
-				Value: aws.String(functionName),
+				Value: aws.String(b.name),
 			}, {
 				Name:  aws.String("Operation"),
 				Value: aws.String(op),
