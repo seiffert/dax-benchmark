@@ -24,15 +24,16 @@ package:
    - ./bin/**
 
 functions:
-  benchmark-dynamodb:
-    handler: bin/benchmark-dynamodb
-    timeout: 300
-  benchmark-dax:
-    handler: bin/benchmark-dax
+  benchmark:
+    handler: bin/benchmark
     timeout: 300
     environment:
       DAX_ENDPOINT:
         "Fn::GetAtt": [daxCluster, ClusterDiscoveryEndpoint]
+      DYNAMODB_TABLE_DAX:
+        Ref: dynamodbTableDAX
+      DYNAMODB_TABLE_NODAX:
+        Ref: dynamodbTableNoDAX
 
 resources:
   Resources:
@@ -140,10 +141,24 @@ resources:
         GroupId:
           Fn::GetAtt: [SecurityGroup, GroupId]
 
-    TestTable:
+    dynamodbTableDAX:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: dax-tests-table
+        TableName: dynamodb-benchmark-dax
+        AttributeDefinitions:
+          - AttributeName: name
+            AttributeType: S
+        KeySchema:
+          - AttributeName: name
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 10
+          WriteCapacityUnits: 1
+
+    dynamodbTableNoDAX:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: dynamodb-benchmark-nodax
         AttributeDefinitions:
           - AttributeName: name
             AttributeType: S

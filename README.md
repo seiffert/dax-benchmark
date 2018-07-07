@@ -4,7 +4,7 @@ This repository is the code I used to test the performance of a [DAX](https://aw
 
 ## Approach
 
-This benchmark code simulates very homogeneous read- and write-traffic against a DAX cluster and a DynamoDB table. To do this, it uses two Lambda functions that run in sequence and produce requests for 4 minutes each. The read- and write-latency of DynamoDB items from both simulations can be found in CloudWatch afterwards.
+This benchmark code simulates very homogeneous read- and write-traffic against a DAX cluster and a DynamoDB table. To do this, it uses a Lambda function that generates traffic on a DAX cluster and on a DynamoDB table in parallel for 4 minutes. The read- and write-latency of DynamoDB items from both setups can be found in CloudWatch afterwards.
 
 ## Run it!
 
